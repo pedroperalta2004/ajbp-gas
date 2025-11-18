@@ -1,0 +1,35 @@
+PALETA DE CORES – Site A.J.B.P. Gás
+
+Primária – Laranja AJBP
+• HEX: #F97316
+• Tailwind: orange-500
+• Uso: Botões principais, ícones e títulos.
+
+Primária Escura
+• HEX: #EA580C
+• Tailwind: orange-600
+• Uso: Hover em botões e textos ativos.
+
+Secundária – Verde Teal
+• HEX: #0F766E
+• Tailwind: teal-700
+• Uso: Botões secundários e elementos de navegação.
+
+Secundária Escura
+• HEX: #115E59
+• Tailwind: teal-800
+• Uso: Hover do botão de login.
+
+Fundo Claro
+• HEX: #F3F4F6
+• Tailwind: gray-100
+• Uso: Fundo das páginas e secções.
+
+Cinza Escuro (Texto)
+• HEX: #1F2937
+• Tailwind: gray-800
+• Uso: Texto principal.
+
+Branco
+• HEX: #FFFFFF
+• Uso: Cartões, áreas destacadas e tipografia sobre fundos coloridos.
