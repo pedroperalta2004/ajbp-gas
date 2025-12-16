@@ -1,157 +1,350 @@
+<?php
+require 'includes/auth.php';
+require 'includes/connection.php';
+
+$userId = (int)($_SESSION['user_id'] ?? 0);
+
+if (empty($_SESSION['csrf_token'])) {
+  $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_message') {
+  $csrf = $_POST['csrf_token'] ?? '';
+  if (!hash_equals($_SESSION['csrf_token'], $csrf)) {
+    header("Location: cliente.php?msg=csrf");
+    exit;
+  }
+
+  $assunto  = trim($_POST['assunto'] ?? '');
+  $mensagem = trim($_POST['mensagem'] ?? '');
+
+  if ($assunto === '' || $mensagem === '') {
+    header("Location: cliente.php?msg=campos");
+    exit;
+  }
+
+  if (mb_strlen($assunto) > 100) $assunto = mb_substr($assunto, 0, 100);
+  if (mb_strlen($mensagem) > 5000) $mensagem = mb_substr($mensagem, 0, 5000);
+
+  $stmt = $pdo->prepare("INSERT INTO mensagens (user_id, assunto, mensagem) VALUES (?, ?, ?)");
+  $stmt->execute([$userId, $assunto, $mensagem]);
+
+  header("Location: cliente.php?msg=enviada#mensagens");
+  exit;
+}
+
+$stmt = $pdo->prepare("
+  SELECT
+    e.id,
+    e.tipo_gas,
+    e.modalidade,
+    e.quantidade,
+    e.estado,
+    e.created_at,
+    e.morada,
+    e.observacoes,
+    z.nome AS zona_nome,
+    e.preco_unit,
+    e.valor_total
+  FROM encomendas e
+  LEFT JOIN zonas z
+    ON z.id = e.zona_id
+  WHERE e.user_id = ?
+  ORDER BY e.created_at DESC
+");
+$stmt->execute([$userId]);
+$encomendas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$stmt = $pdo->prepare("
+  SELECT id, assunto, mensagem, resposta, created_at, responded_at
+  FROM mensagens
+  WHERE user_id = ?
+  ORDER BY created_at DESC
+");
+$stmt->execute([$userId]);
+$mensagens = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+function badge($text, $type = 'gray') {
+  $map = [
+    'gray'   => 'bg-gray-100 text-gray-800',
+    'teal'   => 'bg-teal-100 text-teal-800',
+    'orange' => 'bg-orange-100 text-orange-800',
+    'red'    => 'bg-red-100 text-red-800',
+    'green'  => 'bg-green-100 text-green-800',
+    'blue'   => 'bg-blue-100 text-blue-800',
+  ];
+  $cls = $map[$type] ?? $map['gray'];
+  return '<span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold '.$cls.'">'.htmlspecialchars((string)$text).'</span>';
+}
+
+function estadoEncomendaType($estado) {
+  $e = mb_strtolower(trim((string)$estado));
+  if (str_contains($e, 'receb')) return 'blue';
+  if (str_contains($e, 'process')) return 'orange';
+  if (str_contains($e, 'pend')) return 'red';
+  if (str_contains($e, 'entreg')) return 'green';
+  if (str_contains($e, 'cancel')) return 'gray';
+  return 'gray';
+}
+
+function euro($v) {
+  if ($v === null || $v === '' || !is_numeric($v)) return '—';
+  return number_format((float)$v, 2, ',', '.') . ' €';
+}
+
+function toFloat($v) {
+  $s = trim((string)$v);
+  if ($s === '') return 0.0;
+  $s = str_replace([' ', '€'], '', $s);
+  $s = str_replace(',', '.', $s);
+  if (!is_numeric($s)) return 0.0;
+  return (float)$s;
+}
+?>
 <!DOCTYPE html>
 <html lang="pt">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Área de Cliente | A.J.B.P. Gás</title>
-  <link rel="icon" href="logo.png" type="image/png">
+  <link rel="icon" href="img/logo.png" type="image/png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
   <script>
     tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Poppins', 'sans-serif'] }
-        }
-      }
+      theme: { extend: { fontFamily: { sans: ['Poppins','sans-serif'] } } }
     }
   </script>
 </head>
 
-<body class="min-h-screen flex bg-gray-100 font-sans">
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex flex-col">
 
-  <!-- SIDEBAR -->
-  <aside class="w-64 bg-teal-800 text-white flex flex-col justify-between p-6 shadow-lg">
+  <?php include('includes/header.php'); ?>
 
-    <div>
-      <div class="flex justify-center mb-6">
-        <img src="img/logo_white.png" alt="Logotipo A.J.B.P. Gás" class="h-16">
+  <main class="flex-1 w-full">
+    <div class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10">
+
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+        <div>
+          <h1 class="text-3xl font-bold text-teal-800">Área de Cliente</h1>
+          <p class="text-gray-600">Consulte as suas encomendas e fala connosco através das mensagens.</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <a href="#encomendas" class="px-4 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50 transition font-medium">
+            Encomendas
+          </a>
+          <a href="#mensagens" class="px-4 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50 transition font-medium">
+            Mensagens
+          </a>
+        </div>
       </div>
 
-      <h2 class="text-xl font-semibold mb-4">Área de Cliente</h2>
+      <!-- Alertas -->
+      <?php if(isset($_GET['ok']) && $_GET['ok'] === 'encomenda_enviada'): ?>
+        <div class="mb-6 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-green-800">
+          Encomenda enviada com sucesso.
+        </div>
+      <?php endif; ?>
 
-      <nav class="space-y-2">
+      <?php if(isset($_GET['msg'])): ?>
+        <?php if($_GET['msg'] === 'enviada'): ?>
+          <div class="mb-6 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-green-800">
+            Mensagem enviada com sucesso.
+          </div>
+        <?php elseif($_GET['msg'] === 'campos'): ?>
+          <div class="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800">
+            Preenche o assunto e a mensagem.
+          </div>
+        <?php elseif($_GET['msg'] === 'csrf'): ?>
+          <div class="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800">
+            Pedido inválido. Tenta novamente.
+          </div>
+        <?php endif; ?>
+      <?php endif; ?>
+
+      <div class="space-y-8">
+
         <!-- Encomendas -->
-        <a href="#encomendas" class="flex items-center gap-2 px-3 py-3 rounded-lg bg-teal-900 font-medium text-white">
-          <svg xmlns="http://www.w3.org/2000/svg" 
-              viewBox="0 0 24 24" 
-              class="h-5 w-5">
-            <path fill="#D6A77A" d="M3 7l9-4 9 4-9 4z"/>
-            <path fill="#C29267" d="M12 11l9-4v9l-9 4z"/>
-            <path fill="#B07F57" d="M12 11L3 7v9l9 4z"/>
-          </svg>
-          Encomendas
-        </a>
+        <section id="encomendas" class="bg-white rounded-2xl shadow-md overflow-hidden">
+          <div class="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+            <h2 class="text-xl font-semibold">Encomendas</h2>
+            <span class="text-sm text-gray-500"><?= count($encomendas) ?> registos</span>
+          </div>
 
-        <!-- Faturas -->
-        <a href="#faturas" 
-          class="flex items-center gap-2 px-3 py-3 rounded-lg hover:bg-teal-900 transition font-medium text-white">
-          <svg xmlns="http://www.w3.org/2000/svg" 
-              viewBox="0 0 24 24" 
-              class="h-5 w-5">
-            <path fill="#E4E4E4" d="M6 2h9l5 5v15H6z"/>
-            <path fill="#CCCCCC" d="M15 2v5h5z"/>
-          </svg>
-          Faturas
-        </a>
-      </nav>
-    </div>
+          <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table class="min-w-full text-left">
+              <thead class="bg-gray-50">
+                <tr class="text-sm text-gray-600">
+                  <th class="px-6 py-3 font-semibold">Data</th>
+                  <th class="px-6 py-3 font-semibold">Zona</th>
+                  <th class="px-6 py-3 font-semibold">Tipo de Gás</th>
+                  <th class="px-6 py-3 font-semibold">Modalidade</th>
+                  <th class="px-6 py-3 font-semibold">Quantidade</th>
+                  <th class="px-6 py-3 font-semibold">Morada</th>
+                  <th class="px-6 py-3 font-semibold">Observações</th>
+                  <th class="px-6 py-3 font-semibold">Valor</th>
+                  <th class="px-6 py-3 font-semibold">Estado</th>
+                </tr>
+              </thead>
 
-    <div class="mt-6 text-center">
-      <a href="index.php" class="inline-block bg-white text-teal-800 font-semibold px-5 py-2 rounded-lg shadow-md hover:bg-teal-600 hover:text-white transition">
-         Sair
-      </a>
-    </div>
+              <tbody class="divide-y divide-gray-100">
+                <?php if(count($encomendas) === 0): ?>
+                  <tr>
+                    <td colspan="9" class="px-6 py-10 text-center text-gray-500">Ainda não existem encomendas.</td>
+                  </tr>
+                <?php else: ?>
+                  <?php foreach($encomendas as $e): ?>
+                    <?php
+                      $qtd      = toFloat($e['quantidade'] ?? 0);
+                      $unit     = is_numeric($e['preco_unit'] ?? null) ? (float)$e['preco_unit'] : null;
+                      $total    = is_numeric($e['valor_total'] ?? null) ? (float)$e['valor_total'] : null;
+                      $zonaNome = $e['zona_nome'] ?? null;
 
-  </aside>
+                      if ($total === null && $unit !== null) {
+                        $total = $unit * $qtd;
+                      }
+                    ?>
+                    <tr class="hover:bg-gray-50 transition align-top">
+                      <td class="px-6 py-4 text-sm whitespace-nowrap"><?= htmlspecialchars((string)$e['created_at']) ?></td>
 
-  <!-- CONTEÚDO PRINCIPAL -->
-  <main class="flex-1 p-8">
+                      <td class="px-6 py-4 text-sm whitespace-nowrap">
+                        <?= $zonaNome ? htmlspecialchars($zonaNome) : '<span class="text-gray-400">—</span>' ?>
+                      </td>
 
-    <!-- Histórico de Encomendas -->
-    <section id="encomendas" class="bg-white rounded-xl p-6 shadow-md mb-10">
-      <h1 class="text-2xl font-semibold text-orange-500 mb-4">Histórico de Encomendas</h1>
+                      <td class="px-6 py-4 text-sm whitespace-nowrap"><?= htmlspecialchars((string)$e['tipo_gas']) ?></td>
 
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse">
-          <thead>
-            <tr class="bg-orange-500 text-white">
-              <th class="p-3 font-medium">Data</th>
-              <th class="p-3 font-medium">Tipo de Gás</th>
-              <th class="p-3 font-medium">Quantidade</th>
-              <th class="p-3 font-medium">Estado</th>
-            </tr>
-          </thead>
+                      <td class="px-6 py-4 text-sm whitespace-nowrap">
+                        <?= htmlspecialchars((string)($e['modalidade'] ?? '—')) ?>
+                      </td>
 
-          <tbody class="text-gray-700">
-            <tr class="border-b hover:bg-gray-50">
-              <td class="p-3">20/10/2025</td>
-              <td class="p-3">Gás Butano</td>
-              <td class="p-3">2 Botijas</td>
-              <td class="p-3">Entregue</td>
-            </tr>
+                      <td class="px-6 py-4 text-sm whitespace-nowrap"><?= htmlspecialchars((string)$e['quantidade']) ?></td>
 
-            <tr class="border-b hover:bg-gray-50">
-              <td class="p-3">08/09/2025</td>
-              <td class="p-3">Gás Propano</td>
-              <td class="p-3">1 Botija</td>
-              <td class="p-3">Em processamento</td>
-            </tr>
+                      <td class="px-6 py-4 text-sm">
+                        <?php if(!empty($e['morada'])): ?>
+                          <div class="max-w-xs break-words"><?= nl2br(htmlspecialchars((string)$e['morada'])) ?></div>
+                        <?php else: ?>
+                          <span class="text-gray-400">—</span>
+                        <?php endif; ?>
+                      </td>
 
-            <tr class="hover:bg-gray-50">
-              <td class="p-3">22/08/2025</td>
-              <td class="p-3">Gás Canalizado</td>
-              <td class="p-3">Mensal</td>
-              <td class="p-3">Pago</td>
-            </tr>
-          </tbody>
-        </table>
+                      <td class="px-6 py-4 text-sm">
+                        <?php if(!empty($e['observacoes'])): ?>
+                          <div class="max-w-xs break-words"><?= nl2br(htmlspecialchars((string)$e['observacoes'])) ?></div>
+                        <?php else: ?>
+                          <span class="text-gray-400">—</span>
+                        <?php endif; ?>
+                      </td>
+
+                      <td class="px-6 py-4 text-sm whitespace-nowrap font-semibold">
+                        <?= euro($total) ?>
+                        <?php if($unit === null && $total === null): ?>
+                          <div class="text-xs text-gray-400 font-normal">sem preço definido</div>
+                        <?php endif; ?>
+                      </td>
+
+                      <td class="px-6 py-4 text-sm whitespace-nowrap">
+                        <?= badge($e['estado'], estadoEncomendaType($e['estado'])); ?>
+                      </td>
+                    </tr>
+                  <?php endforeach; ?>
+                <?php endif; ?>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Mensagens -->
+        <section id="mensagens" class="bg-white rounded-2xl shadow-md overflow-hidden">
+          <div class="px-6 py-5 border-b border-gray-100">
+            <h2 class="text-xl font-semibold">Mensagens</h2>
+            <p class="text-sm text-gray-500 mt-1">Envie uma mensagem ao suporte e acompanhe as respostas.</p>
+          </div>
+
+          <div class="p-6 border-b border-gray-100">
+            <form method="POST" class="space-y-4">
+              <input type="hidden" name="action" value="send_message">
+              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+
+              <div>
+                <label class="block font-medium mb-1">Assunto</label>
+                <input type="text" name="assunto" required maxlength="100" class="w-full border border-gray-300 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Ex.: Dúvida sobre entrega">
+              </div>
+
+              <div>
+                <label class="block font-medium mb-1">Mensagem</label>
+                <textarea name="mensagem" required rows="5" class="w-full border border-gray-300 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Escreva a sua mensagem..."></textarea>
+              </div>
+
+              <div>
+                <button type="submit" class="bg-orange-500 hover:bg-orange-600 text-white font-semibold px-6 py-3 rounded-md transition">
+                  Enviar Mensagem
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table class="min-w-full text-left">
+              <thead class="bg-gray-50">
+                <tr class="text-sm text-gray-600">
+                  <th class="px-6 py-3 font-semibold">Data</th>
+                  <th class="px-6 py-3 font-semibold">Assunto</th>
+                  <th class="px-6 py-3 font-semibold">Estado</th>
+                  <th class="px-6 py-3 font-semibold">Resposta</th>
+                </tr>
+              </thead>
+
+              <tbody class="divide-y divide-gray-100">
+                <?php if(count($mensagens) === 0): ?>
+                  <tr>
+                    <td colspan="4" class="px-6 py-10 text-center text-gray-500">Ainda não tem mensagens.</td>
+                  </tr>
+                <?php else: ?>
+                  <?php foreach($mensagens as $m): ?>
+                    <tr class="hover:bg-gray-50 transition align-top">
+                      <td class="px-6 py-4 text-sm whitespace-nowrap">
+                        <?= htmlspecialchars((string)$m['created_at']) ?>
+                      </td>
+
+                      <td class="px-6 py-4">
+                        <div class="font-medium break-all"><?= htmlspecialchars((string)$m['assunto']) ?></div>
+                        <div class="text-sm text-gray-500 mt-1 whitespace-pre-wrap break-all max-h-40 min-w-40 overflow-auto pr-2"><?= htmlspecialchars((string)$m['mensagem']) ?></div>
+                      </td>
+
+                      <td class="px-6 py-4 text-sm whitespace-nowrap">
+                        <?= !empty($m['resposta']) ? badge('Respondida','teal') : badge('Aberta','orange'); ?>
+                      </td>
+
+                      <td class="px-6 py-4 text-sm">
+                        <?php if(!empty($m['resposta'])): ?>
+                          <div class="rounded-lg border border-teal-100 bg-teal-50 p-3 text-sm text-teal-900">
+                            <div class="font-semibold mb-1">Resposta</div>
+                            <div class="whitespace-pre-wrap break-all max-h-40 overflow-auto min-w-40 pr-2 text-gray-700"><?= htmlspecialchars((string)$m['resposta']) ?></div>
+                            <?php if(!empty($m['responded_at'])): ?>
+                              <div class="text-xs text-teal-700 mt-2">
+                                Respondida em: <?= htmlspecialchars((string)$m['responded_at']) ?>
+                              </div>
+                            <?php endif; ?>
+                          </div>
+                        <?php else: ?>
+                          <span class="text-gray-400">—</span>
+                        <?php endif; ?>
+                      </td>
+                    </tr>
+                  <?php endforeach; ?>
+                <?php endif; ?>
+              </tbody>
+            </table>
+          </div>
+
+        </section>
+
       </div>
-    </section>
-
-    <!-- Faturas -->
-    <section id="faturas" class="bg-white rounded-xl p-6 shadow-md">
-      <h1 class="text-2xl font-semibold text-orange-500 mb-4">Faturas</h1>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse">
-          <thead>
-            <tr class="bg-orange-500 text-white">
-              <th class="p-3 font-medium">Nº Fatura</th>
-              <th class="p-3 font-medium">Data</th>
-              <th class="p-3 font-medium">Valor (€)</th>
-              <th class="p-3 font-medium">Estado</th>
-            </tr>
-          </thead>
-
-          <tbody class="text-gray-700">
-            <tr class="border-b hover:bg-gray-50">
-              <td class="p-3">FT-1023</td>
-              <td class="p-3">20/10/2025</td>
-              <td class="p-3">34,50</td>
-              <td class="p-3">Pago</td>
-            </tr>
-
-            <tr class="border-b hover:bg-gray-50">
-              <td class="p-3">FT-0987</td>
-              <td class="p-3">08/09/2025</td>
-              <td class="p-3">17,25</td>
-              <td class="p-3">Pendente</td>
-            </tr>
-
-            <tr class="hover:bg-gray-50">
-              <td class="p-3">FT-0921</td>
-              <td class="p-3">22/08/2025</td>
-              <td class="p-3">28,00</td>
-              <td class="p-3">Pago</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
+    </div>
   </main>
+
+  <?php include('includes/footer.php'); ?>
 
 </body>
 </html>
